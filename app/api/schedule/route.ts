@@ -55,7 +55,7 @@ const normalizeHeader = (header: string) => header.trim().toLowerCase()
 
 export async function GET() {
   try {
-    const schedulePath = path.resolve(process.cwd(), '..', 'schedule.csv')
+    const schedulePath = path.resolve(process.cwd(), 'schedule.csv')
     const csv = await readFile(schedulePath, 'utf8')
     const rows = csv
       .split(/\r?\n/)
