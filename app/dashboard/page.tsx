@@ -1,147 +1,580 @@
 'use client'
 
-import { useState } from 'react'
-import { useAuthStore } from '@/lib/authStore'
-import { BarChart3, TrendingUp, Users, DollarSign, ArrowUpRight, ArrowDownRight, ClipboardList } from 'lucide-react'
-import Link from 'next/link'
-import StatCard from '@/components/StatCard'
-import ChartCard from '@/components/ChartCard'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { CalendarDays, Clock, LogIn, LogOut, UserX, Users } from 'lucide-react'
+
+type ScheduleAgent = {
+  id: string
+  name: string
+  role: string
+  dayOff1: string
+  dayOff2: string
+  startShift: string
+  endShift: string
+  break1: string
+  lunch: string
+  break2: string
+  supervisor: string
+}
+
+type ScheduleResponse = {
+  agents: ScheduleAgent[]
+  supervisors: string[]
+}
+
+type AgentStatus = 'notLoggedIn' | 'loggedIn' | 'loggedOut' | 'off' | 'absent'
+
+type BoardAgent = ScheduleAgent & {
+  status: AgentStatus
+  dayOffApplies: string
+  scheduledStart: Date
+  scheduledEnd: Date
+}
+
+type Lane = {
+  key: AgentStatus
+  title: string
+  description: string
+  icon: JSX.Element
+  agents: BoardAgent[]
+  color: {
+    border: string
+    header: string
+    icon: string
+    count: string
+  }
+}
+
+const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const fiveMinutes = 5 * 60 * 1000
+
+const getPhilippineDate = (date: Date) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+    hourCycle: 'h23',
+  }).formatToParts(date)
+
+  const getPart = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value || 0)
+
+  return new Date(
+    getPart('year'),
+    getPart('month') - 1,
+    getPart('day'),
+    getPart('hour'),
+    getPart('minute'),
+    getPart('second')
+  )
+}
+
+const getCurrentShiftInfo = (date: Date) => {
+  const phDate = getPhilippineDate(date)
+  const shiftDate = new Date(phDate)
+
+  if (phDate.getHours() < 19) {
+    shiftDate.setDate(shiftDate.getDate() - 1)
+  }
+
+  const shiftDayIndex = shiftDate.getDay()
+  const nextDayIndex = (shiftDayIndex + 1) % dayNames.length
+
+  return {
+    shiftDate,
+    shiftDay: dayNames[shiftDayIndex],
+    nextDay: dayNames[nextDayIndex],
+    phDate,
+  }
+}
+
+const getShiftStartMinutes = (time: string) => {
+  const match = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+
+  if (!match) {
+    return 0
+  }
+
+  const [, hourValue, minuteValue, meridiem] = match
+  let hours = Number(hourValue) % 12
+
+  if (meridiem.toUpperCase() === 'PM') {
+    hours += 12
+  }
+
+  return hours * 60 + Number(minuteValue)
+}
+
+const getDayOffAppliedForCurrentShift = (agent: ScheduleAgent, shiftDay: string, nextDay: string) => {
+  const startMinutes = getShiftStartMinutes(agent.startShift)
+  return startMinutes >= 19 * 60 ? shiftDay : nextDay
+}
+
+const isAgentOffForCurrentShift = (agent: ScheduleAgent, shiftDay: string, nextDay: string) => {
+  const dayToCheck = getDayOffAppliedForCurrentShift(agent, shiftDay, nextDay)
+  const daysOff = [agent.dayOff1, agent.dayOff2].map((day) => day.trim().toLowerCase())
+
+  return daysOff.includes(dayToCheck.toLowerCase())
+}
+
+const getScheduledDateTime = (shiftDate: Date, time: string) => {
+  const minutes = getShiftStartMinutes(time)
+  const scheduledDate = new Date(shiftDate)
+
+  if (minutes < 19 * 60) {
+    scheduledDate.setDate(scheduledDate.getDate() + 1)
+  }
+
+  scheduledDate.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0)
+  return scheduledDate
+}
+
+const getAgentScheduleWindow = (agent: ScheduleAgent, shiftDate: Date) => {
+  const scheduledStart = getScheduledDateTime(shiftDate, agent.startShift)
+  const scheduledEnd = getScheduledDateTime(shiftDate, agent.endShift)
+
+  if (scheduledEnd <= scheduledStart) {
+    scheduledEnd.setDate(scheduledEnd.getDate() + 1)
+  }
+
+  return { scheduledStart, scheduledEnd }
+}
+
+const getAgentScheduleStatus = (agent: ScheduleAgent, shiftDate: Date, phDate: Date): AgentStatus => {
+  const { scheduledStart, scheduledEnd } = getAgentScheduleWindow(agent, shiftDate)
+
+  if (phDate < scheduledStart) {
+    return 'notLoggedIn'
+  }
+
+  if (phDate >= scheduledEnd) {
+    return 'loggedOut'
+  }
+
+  return 'loggedIn'
+}
+
+const getShiftKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`
+
+const getMillisecondsUntilNextFiveMinuteMark = (date: Date) => {
+  const phDate = getPhilippineDate(date)
+  const next = new Date(phDate)
+  const nextMinute = Math.ceil((phDate.getMinutes() + 1) / 5) * 5
+
+  next.setMinutes(nextMinute, 0, 0)
+
+  if (next <= phDate) {
+    next.setMinutes(next.getMinutes() + 5)
+  }
+
+  return Math.max(next.getTime() - phDate.getTime(), 1000)
+}
+
+const formatShiftDate = (date: Date) =>
+  new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(date)
 
 export default function DashboardPage() {
-  const { user } = useAuthStore()
-  const [timeRange, setTimeRange] = useState('30d')
+  const [agents, setAgents] = useState<ScheduleAgent[]>([])
+  const [supervisors, setSupervisors] = useState<string[]>([])
+  const [selectedSupervisor, setSelectedSupervisor] = useState('')
+  const [absentAgentIds, setAbsentAgentIds] = useState<string[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [now, setNow] = useState(() => new Date())
+
+  const loadSchedule = useCallback(async (showLoading = false) => {
+    try {
+      if (showLoading) {
+        setIsLoading(true)
+      }
+
+      setError('')
+
+      const response = await fetch('/api/schedule', { cache: 'no-store' })
+      const data = (await response.json()) as Partial<ScheduleResponse> & { error?: string }
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Unable to load schedule')
+      }
+
+      const nextAgents = data.agents || []
+      const nextSupervisors = data.supervisors || []
+
+      setAgents(nextAgents)
+      setSupervisors(nextSupervisors)
+      setSelectedSupervisor((current) => current || nextSupervisors[0] || '')
+    } catch (loadError: any) {
+      setError(loadError.message || 'Unable to load schedule')
+    } finally {
+      if (showLoading) {
+        setIsLoading(false)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSchedule(true)
+  }, [loadSchedule])
+
+  useEffect(() => {
+    let interval: number | undefined
+
+    const timeout = window.setTimeout(() => {
+      setNow(new Date())
+      loadSchedule()
+
+      interval = window.setInterval(() => {
+        setNow(new Date())
+        loadSchedule()
+      }, fiveMinutes)
+    }, getMillisecondsUntilNextFiveMinuteMark(new Date()))
+
+    return () => {
+      window.clearTimeout(timeout)
+
+      if (interval) {
+        window.clearInterval(interval)
+      }
+    }
+  }, [loadSchedule])
+
+  const selectedAgents = useMemo(
+    () => agents.filter((agent) => agent.supervisor === selectedSupervisor),
+    [agents, selectedSupervisor]
+  )
+
+  const currentShift = useMemo(() => getCurrentShiftInfo(now), [now])
+  const shiftKey = useMemo(() => getShiftKey(currentShift.shiftDate), [currentShift.shiftDate])
+
+  useEffect(() => {
+    const storedAbsences = window.localStorage.getItem(`dashboard-absent-${shiftKey}`)
+    setAbsentAgentIds(storedAbsences ? JSON.parse(storedAbsences) : [])
+  }, [shiftKey])
+
+  const saveAbsentAgentIds = useCallback(
+    (nextAbsentAgentIds: string[]) => {
+      setAbsentAgentIds(nextAbsentAgentIds)
+      window.localStorage.setItem(
+        `dashboard-absent-${shiftKey}`,
+        JSON.stringify(nextAbsentAgentIds)
+      )
+    },
+    [shiftKey]
+  )
+
+  const handleAgentCardClick = useCallback(
+    (agent: BoardAgent) => {
+      if (agent.status === 'off') {
+        return
+      }
+
+      if (agent.status === 'absent') {
+        const shouldRemoveAbsent = window.confirm(
+          `Remove ${agent.name} from Absent for this shift?`
+        )
+
+        if (shouldRemoveAbsent) {
+          saveAbsentAgentIds(absentAgentIds.filter((agentId) => agentId !== agent.id))
+        }
+
+        return
+      }
+
+      const shouldMarkAbsent = window.confirm(
+        `Mark ${agent.name} as absent for this shift?`
+      )
+
+      if (shouldMarkAbsent) {
+        saveAbsentAgentIds(Array.from(new Set([...absentAgentIds, agent.id])))
+      }
+    },
+    [absentAgentIds, saveAbsentAgentIds]
+  )
+
+  const boardAgents = useMemo(
+    () =>
+      selectedAgents.map((agent) => {
+        const dayOffApplies = getDayOffAppliedForCurrentShift(
+          agent,
+          currentShift.shiftDay,
+          currentShift.nextDay
+        )
+        const { scheduledStart, scheduledEnd } = getAgentScheduleWindow(
+          agent,
+          currentShift.shiftDate
+        )
+
+        if (absentAgentIds.includes(agent.id)) {
+          return {
+            ...agent,
+            status: 'absent' as const,
+            dayOffApplies,
+            scheduledStart,
+            scheduledEnd,
+          }
+        }
+
+        if (isAgentOffForCurrentShift(agent, currentShift.shiftDay, currentShift.nextDay)) {
+          return {
+            ...agent,
+            status: 'off' as const,
+            dayOffApplies,
+            scheduledStart,
+            scheduledEnd,
+          }
+        }
+
+        return {
+          ...agent,
+          status: getAgentScheduleStatus(agent, currentShift.shiftDate, currentShift.phDate),
+          dayOffApplies,
+          scheduledStart,
+          scheduledEnd,
+        }
+      }),
+    [
+      currentShift.nextDay,
+      currentShift.phDate,
+      currentShift.shiftDay,
+      currentShift.shiftDate,
+      absentAgentIds,
+      selectedAgents,
+    ]
+  )
+
+  const lanes: Lane[] = [
+    {
+      key: 'notLoggedIn',
+      title: 'Not logged in yet',
+      description: 'Waiting for first login',
+      icon: <Clock size={18} />,
+      agents: boardAgents.filter((agent) => agent.status === 'notLoggedIn'),
+      color: {
+        border: 'border-slate-300',
+        header: 'bg-slate-100/80',
+        icon: 'bg-slate-200 text-slate-700',
+        count: 'bg-slate-200 text-slate-800',
+      },
+    },
+    {
+      key: 'loggedIn',
+      title: 'Logged in',
+      description: 'Currently active',
+      icon: <LogIn size={18} />,
+      agents: boardAgents.filter((agent) => agent.status === 'loggedIn'),
+      color: {
+        border: 'border-emerald-300',
+        header: 'bg-emerald-50',
+        icon: 'bg-emerald-100 text-emerald-700',
+        count: 'bg-emerald-100 text-emerald-800',
+      },
+    },
+    {
+      key: 'loggedOut',
+      title: 'Logged out',
+      description: 'Shift completed',
+      icon: <LogOut size={18} />,
+      agents: boardAgents.filter((agent) => agent.status === 'loggedOut'),
+      color: {
+        border: 'border-amber-300',
+        header: 'bg-amber-50',
+        icon: 'bg-amber-100 text-amber-700',
+        count: 'bg-amber-100 text-amber-800',
+      },
+    },
+    {
+      key: 'off',
+      title: 'Off',
+      description: 'Scheduled day off',
+      icon: <CalendarDays size={18} />,
+      agents: boardAgents.filter((agent) => agent.status === 'off'),
+      color: {
+        border: 'border-sky-300',
+        header: 'bg-sky-50',
+        icon: 'bg-sky-100 text-sky-700',
+        count: 'bg-sky-100 text-sky-800',
+      },
+    },
+    {
+      key: 'absent',
+      title: 'Absent',
+      description: 'Confirmed manually',
+      icon: <UserX size={18} />,
+      agents: boardAgents.filter((agent) => agent.status === 'absent'),
+      color: {
+        border: 'border-red-300',
+        header: 'bg-red-50',
+        icon: 'bg-red-100 text-red-700',
+        count: 'bg-red-100 text-red-800',
+      },
+    },
+  ]
 
   return (
-    <div className="space-y-8">
-      {/* Welcome Section */}
-      <div>
-        <h1 className="font-hanken text-display-lg font-bold text-on-surface mb-2">
-          Welcome back, {user?.user_metadata?.name || user?.email}
-        </h1>
-        <p className="text-on-surface-variant">
-          Here's your analytics overview for the last {timeRange === '7d' ? '7 days' : '30 days'}
-        </p>
-      </div>
+    <div className="space-y-6 pb-8">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-label-md font-semibold uppercase text-primary-container">
+            Team Attendance
+          </p>
+          <h1 className="font-hanken text-headline-lg font-bold text-on-surface">
+            Daily agent status board
+          </h1>
+          <p className="mt-2 max-w-2xl text-on-surface-variant">
+            View scheduled agents by team leader. Status is based only on schedule.csv and refreshes every 5-minute mark in PH time.
+          </p>
+        </div>
 
-      {/* Time Range Selector */}
-      <div className="flex gap-3">
-        {['7d', '30d', '90d'].map((range) => (
-          <button
-            key={range}
-            onClick={() => setTimeRange(range)}
-            className={`px-4 py-2 rounded-DEFAULT text-sm font-medium transition-all ${
-              timeRange === range
-                ? 'bg-primary-container text-on-primary-container'
-                : 'glass-effect glass-effect-hover text-on-surface-variant'
-            }`}
+        <label className="flex w-full flex-col gap-2 sm:max-w-xs">
+          <span className="text-label-md font-semibold text-on-surface">Team leader</span>
+          <select
+            value={selectedSupervisor}
+            onChange={(event) => setSelectedSupervisor(event.target.value)}
+            disabled={isLoading || supervisors.length === 0}
+            className="h-12 rounded-lg border border-outline-variant bg-surface px-4 text-on-surface shadow-sm outline-none transition focus:border-primary-container focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {range === '7d' ? 'Last 7 Days' : range === '30d' ? 'Last 30 Days' : 'Last 90 Days'}
-          </button>
-        ))}
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          icon={<Users size={24} />}
-          label="Active Users"
-          value="2,847"
-          change="+12.5%"
-          trend="up"
-          color="primary"
-        />
-        <StatCard
-          icon={<DollarSign size={24} />}
-          label="Total Revenue"
-          value="$124,569"
-          change="+8.2%"
-          trend="up"
-          color="secondary"
-        />
-        <StatCard
-          icon={<BarChart3 size={24} />}
-          label="Total Projects"
-          value="342"
-          change="+4.1%"
-          trend="up"
-          color="tertiary"
-        />
-        <StatCard
-          icon={<TrendingUp size={24} />}
-          label="Growth Rate"
-          value="24.5%"
-          change="-2.3%"
-          trend="down"
-          color="primary"
-        />
-      </div>
-
-      {/* Charts Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <ChartCard
-          title="Revenue Over Time"
-          description="Monthly revenue trend"
-          data={[65, 59, 80, 81, 56, 85, 92]}
-          labels={['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul']}
-          type="line"
-        />
-        <ChartCard
-          title="Project Distribution"
-          description="By status"
-          data={[120, 150, 90, 70]}
-          labels={['Active', 'Completed', 'On Hold', 'Pending']}
-          type="doughnut"
-        />
-      </div>
-
-        {/* Recent Activity */}
-        <div className="glass-effect rounded-xl p-8 backdrop-blur-glass-lg">
-          <h2 className="font-hanken text-headline-md font-bold text-on-surface mb-6">
-            Recent Activity
-          </h2>
-          <div className="space-y-4">
-            {[1, 2, 3, 4, 5].map((item) => (
-              <div key={item} className="flex items-center justify-between pb-4 border-b border-outline-variant/20 last:border-0">
-                <div>
-                  <p className="text-on-surface font-medium">Project #{1000 + item} Updated</p>
-                  <p className="text-on-surface-variant text-sm">2 hours ago</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-primary-container text-sm font-medium">+$4,200</span>
-                  <div className="bg-primary-container/30 p-2 rounded-lg">
-                    <ArrowUpRight size={16} className="text-primary-container" />
-                  </div>
-                </div>
-              </div>
+            {supervisors.map((supervisor) => (
+              <option key={supervisor} value={supervisor}>
+                {supervisor}
+              </option>
             ))}
-          </div>
-        </div>
+          </select>
+        </label>
+      </div>
 
-        {/* IT Report CTA */}
-        <div className="glass-effect rounded-xl p-8 backdrop-blur-glass-lg">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-container to-inverse-primary flex items-center justify-center">
-                <ClipboardList size={24} className="text-on-primary" />
-              </div>
-              <div>
-                <h2 className="font-hanken text-headline-sm font-bold text-on-surface">
-                  Need IT Support?
-                </h2>
-                <p className="text-on-surface-variant text-sm">
-                  Submit an IT report and our team will assist you
-                </p>
-              </div>
-            </div>
-            <Link
-              href="/dashboard/it-report"
-              className="flex items-center gap-2 px-lg py-md rounded-lg bg-gradient-to-r from-primary to-primary-container hover:from-primary/90 hover:to-primary-container/90 text-on-primary font-medium transition-all whitespace-nowrap"
-            >
-              Submit IT Report
-              <ArrowUpRight size={20} className="rotate-[-45deg]" />
-            </Link>
+      {error && (
+        <div className="rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-error">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="glass-effect rounded-lg p-5 backdrop-blur-glass-lg">
+          <div className="flex items-center gap-3 text-on-surface-variant">
+            <Users size={20} />
+            <span className="text-label-md font-semibold uppercase">Agents</span>
+          </div>
+          <p className="mt-3 font-hanken text-headline-md font-bold text-on-surface">
+            {boardAgents.length}
+          </p>
+        </div>
+        <div className="glass-effect rounded-lg p-5 backdrop-blur-glass-lg">
+          <div className="flex items-center gap-3 text-on-surface-variant">
+            <CalendarDays size={20} />
+            <span className="text-label-md font-semibold uppercase">Team Leader</span>
+          </div>
+          <p className="mt-3 truncate font-hanken text-headline-md font-bold text-on-surface">
+            {selectedSupervisor || 'None'}
+          </p>
+        </div>
+        <div className="glass-effect rounded-lg p-5 backdrop-blur-glass-lg">
+          <div className="flex items-center gap-3 text-on-surface-variant">
+            <Clock size={20} />
+            <span className="text-label-md font-semibold uppercase">Current Shift</span>
+          </div>
+          <p className="mt-3 font-hanken text-headline-md font-bold text-on-surface">
+            {formatShiftDate(currentShift.shiftDate)}
+          </p>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex min-h-[360px] items-center justify-center rounded-lg border border-outline-variant/60 bg-surface/70">
+          <div className="text-center">
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-outline-variant/40 border-t-primary-container" />
+            <p className="text-on-surface-variant">Loading schedule...</p>
           </div>
         </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+          {lanes.map((lane) => (
+            <section
+              key={lane.key}
+              className={`flex min-h-[420px] flex-col rounded-lg border bg-surface/90 ${lane.color.border}`}
+            >
+              <div className={`border-b border-outline-variant/60 p-4 ${lane.color.header}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${lane.color.icon}`}>
+                      {lane.icon}
+                    </div>
+                    <div>
+                      <h2 className="font-hanken text-body-md font-bold text-on-surface">
+                        {lane.title}
+                      </h2>
+                      <p className="text-sm text-on-surface-variant">{lane.description}</p>
+                    </div>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-label-md font-bold ${lane.color.count}`}>
+                    {lane.agents.length}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex-1 space-y-3 p-3">
+                {lane.agents.length > 0 ? (
+                  lane.agents.map((agent) => (
+                    <article
+                      key={agent.id}
+                      onClick={() => handleAgentCardClick(agent)}
+                      className={`rounded-lg border border-outline-variant/60 bg-white p-4 shadow-sm transition ${
+                        agent.status === 'off'
+                          ? 'cursor-default'
+                          : 'cursor-pointer hover:border-primary-container/70 hover:shadow-md'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <h3 className="font-semibold text-on-surface">{agent.name}</h3>
+                        <span className="shrink-0 rounded-full bg-indigo-100 px-2.5 py-1 text-label-sm font-semibold text-indigo-700">
+                          {agent.role}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-label-sm font-semibold text-emerald-700">
+                          Shift In {agent.startShift}
+                        </span>
+                        <span className="rounded-full bg-amber-100 px-3 py-1 text-label-sm font-semibold text-amber-700">
+                          Shift Out {agent.endShift}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-3 py-1 text-label-sm font-semibold text-slate-700">
+                          Off {agent.dayOff1}, {agent.dayOff2}
+                        </span>
+                        {agent.status === 'off' && (
+                          <span className="rounded-full bg-sky-100 px-3 py-1 text-label-sm font-semibold text-sky-700">
+                            Off applies {agent.dayOffApplies}
+                          </span>
+                        )}
+                        {agent.status === 'absent' && (
+                          <span className="rounded-full bg-red-100 px-3 py-1 text-label-sm font-semibold text-red-700">
+                            Confirmed absent
+                          </span>
+                        )}
+                      </div>
+                    </article>
+                  ))
+                ) : (
+                  <div className="flex h-full min-h-48 items-center justify-center rounded-lg border border-dashed border-outline-variant p-6 text-center text-sm text-on-surface-variant">
+                    No agents in this status
+                  </div>
+                )}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

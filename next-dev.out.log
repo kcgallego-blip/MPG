@@ -1,0 +1,58 @@
+
+> mpg-platform@1.0.0 dev
+> next dev --hostname 127.0.0.1 --port 3000
+
+   ▲ Next.js 15.5.18
+   - Local:        http://127.0.0.1:3000
+   - Network:      http://127.0.0.1:3000
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 1714ms
+ ○ Compiling /dashboard ...
+ ✓ Compiled /dashboard in 3.4s (696 modules)
+ GET /dashboard 200 in 3784ms
+ GET /dashboard 200 in 97ms
+ GET /dashboard 200 in 117ms
+ ○ Compiling /login ...
+ ✓ Compiled /login in 1382ms (754 modules)
+ GET /login 200 in 1657ms
+ GET /login 200 in 40ms
+ GET /api/auth/me 200 in 2295ms
+ GET /api/auth/me 200 in 91ms
+ GET /dashboard 200 in 68ms
+ GET /api/auth/me 200 in 141ms
+ ○ Compiling /api/schedule ...
+ ✓ Compiled /api/schedule in 510ms (757 modules)
+ GET /api/schedule 200 in 614ms
+ GET /api/schedule 200 in 616ms
+ GET /api/schedule 200 in 575ms
+ GET /api/schedule 200 in 579ms
+ GET /api/auth/me 200 in 635ms
+ GET /api/auth/me 200 in 93ms
+ GET /dashboard 200 in 195ms
+ GET /login 200 in 70ms
+ GET /api/auth/me 200 in 133ms
+ GET /api/auth/me 200 in 90ms
+ GET /dashboard 200 in 65ms
+ GET /api/auth/me 200 in 104ms
+ GET /api/schedule 200 in 54ms
+ GET /api/schedule 200 in 80ms
+ GET /api/schedule 200 in 69ms
+ GET /api/schedule 200 in 74ms
+ GET /api/auth/me 200 in 154ms
+ GET /api/auth/me 200 in 88ms
+ ✓ Compiled /_not-found in 330ms (762 modules)
+ GET /dashboard 404 in 485ms
+ GET /dashboard 200 in 62ms
+ GET /dashboard 200 in 51ms
+ GET /dashboard 200 in 90ms
+ GET /dashboard 200 in 51ms
+ GET /dashboard 200 in 52ms
+ GET /dashboard 200 in 64ms
+ GET /dashboard 200 in 68ms
+ GET /dashboard 200 in 55ms
+ ○ Compiling /_error ...
+ ✓ Compiled /_error in 1661ms (1108 modules)
+ GET /dashboard 404 in 3451ms
+ GET /dashboard 500 in 360ms
